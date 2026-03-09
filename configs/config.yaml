@@ -1,0 +1,168 @@
+# =============================================================================
+# config.yaml — Cấu hình toàn bộ Pipeline MODCAN-GNN
+# Chỉnh sửa các tham số tại đây mà không cần sửa code nguồn
+# =============================================================================
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+paths:
+  # Thư mục gốc của dữ liệu LOCAL (đã tải sẵn)
+  raw_local_root: /home/ankkun/Downloads/data
+  data_root: /workspace/data
+  raw:
+    luad: /workspace/data/raw/tcga_luad
+    lusc: /workspace/data/raw/tcga_lusc
+    ppi: /workspace/data/raw/ppi
+    labels: /workspace/data/raw/labels
+    # Đường dẫn trực tiếp đến dữ liệu local (dùng trong preprocess v2)
+    local_ppi_filtered: /home/ankkun/Downloads/data/network/string_full_v12_0.7.txt
+    local_cgc:          /home/ankkun/Downloads/data/reference/579_CGC.txt
+    local_non_driver:   /home/ankkun/Downloads/data/reference/2179_non_driver_genes.txt
+  processed:
+    luad: /workspace/data/processed/luad
+    lusc: /workspace/data/processed/lusc
+  logs: /workspace/logs
+  models: /workspace/models/checkpoints
+  results: /workspace/results
+
+# ── Data Acquisition ──────────────────────────────────────────────────────────
+data_acquisition:
+  cancer_types:
+    - cancer_type: "LUAD"
+      tcga_project: "TCGA-LUAD"
+    - cancer_type: "LUSC"
+      tcga_project: "TCGA-LUSC"
+  data_types:
+    - "RNASeq2GeneNorm"     # Gene expression (RNA-seq)
+    - "Methylation450k"     # DNA Methylation
+    - "Mutation"            # Somatic Mutation (SNV/indel)
+    - "CNV"                 # Copy Number Variation (mới thêm)
+    - "Clinical"            # Lâm sàng
+  # STRING PPI — dùng file local đã có sẵn (ưu tiên)
+  ppi:
+    database: "string"
+    version: "12.0"
+    species_id: 9606         # Homo sapiens
+    min_score: 700           # File _0.7.txt đã filter score >= 700
+    use_local_file: true     # true = dùng local, false = download từ STRING API
+    top_percentile: 70       # Chỉ giữ top 70% theo score (theo MODCAN paper)
+  # Driver gene labels — dùng file local
+  labels:
+    use_local_files: true
+    ncg_url: "http://ncg.kcl.ac.uk/query.php?term=cancer_gene&db=NCG7"
+    cosmic_tier: [1, 2]
+
+# ── Preprocessing ─────────────────────────────────────────────────────────────
+preprocessing:
+  rnaseq:
+    log_transform: false     # ĐÃ log2 sẵn trong local data (UCSC format)
+    normalize: "zscore"      # Z-score normalization theo gene
+    min_mean_expression: 1.0 # Lọc gen có biểu hiện trung bình quá thấp
+    na_threshold: 0.2        # Loại mẫu/gen nếu NA > 20%
+  methylation:
+    normalize: "zscore"
+    na_threshold: 0.2
+    beta_value: true         # Dữ liệu ở dạng beta values (0-1)
+  mutation:
+    min_mutation_rate: 0.01  # Loại gen bị đột biến ở < 1% bệnh nhân
+  cnv:
+    include: true            # Tích hợp CNV vào omics features
+  random_seed: 42
+  train_val_test_split: [0.7, 0.15, 0.15]  # Tỉ lệ chia tập dataset
+
+# ── Community Cohesion (WGCNA-style) ─────────────────────────────────────────
+community_cohesion:
+  # Ngưỡng theo MODCAN paper: chỉ giữ community Zsummary >= 10
+  zsummary_threshold: 10.0
+  top_edge_percentile: 10   # Top 10% tương tác trong mỗi community
+  wgcna_power: 6            # Soft threshold power (thường tìm bằng pickSoftThreshold)
+  min_module_size: 30       # Kích thước tối thiểu của module
+
+# ── Spectral Clustering ───────────────────────────────────────────────────────
+clustering:
+  method: "spectral"
+  k_range: [2, 8]           # Tìm số cụm tối ưu trong khoảng này
+  n_neighbors: 10           # Cho kernel RBF của spectral clustering
+  affinity: "nearest_neighbors"
+  silhouette_metric: "euclidean"
+  random_seed: 42
+
+# ── Network Builder (CẢI TIẾN CỐT LÕI) ───────────────────────────────────────
+network_builder:
+  method: "random_forest"   # Lựa chọn: "random_forest", "mutual_information", "gradient_boosting"
+  # Random Forest params
+  rf:
+    n_estimators: 200
+    max_features: "sqrt"
+    n_jobs: -1               # Dùng tất cả CPU cores
+    random_state: 42
+  # Mutual Information params
+  mi:
+    n_neighbors: 3           # Cho k-NN MI estimator
+  # Ngưỡng tạo cạnh
+  edge_threshold:
+    type: "dynamic"          # "dynamic" (percentile) hoặc "fixed"
+    percentile: 90           # Chỉ tạo cạnh nếu importance >= 90th percentile
+    fixed_value: 0.01        # Dùng nếu type = "fixed"
+  # Fuse với PPI
+  ppi_fusion:
+    method: "union"          # "union" hoặc "intersection"
+    ppi_weight: 0.5          # Trọng số của PPI trong ma trận kết hợp
+    coassoc_weight: 0.5      # Trọng số của co-association network
+
+# ── GNN Model ─────────────────────────────────────────────────────────────────
+model:
+  architecture: "gat"       # Lựa chọn: "gcn", "gat"
+  # Lớp convolution
+  num_layers: 2             # Tối đa 3, theo khuyến nghị (tránh Over-smoothing)
+  hidden_channels: 256
+  heads: 4                  # Chỉ dùng cho GAT (multi-head attention)
+  dropout: 0.5
+  # Initial Residual Connection (từ MLGCN-Driver)
+  initial_residual: true
+  # Representation Separation (từ SGCD)
+  representation_separation: true
+  # Output
+  output_dim: 1             # Nhị phân: Driver (1) vs Passenger (0)
+  # Focal Loss (xử lý mất cân bằng nhãn)
+  focal_loss:
+    alpha: 0.75
+    gamma: 2.0
+  # Feature dimensions (sẽ tự động điền từ dữ liệu)
+  # Gồm: omics features + PPI topology features (node2vec)
+  node2vec:
+    embedding_dim: 64
+    walk_length: 30
+    num_walks: 20
+    context_size: 10
+    num_negative_samples: 1
+    p: 1.0                  # Return parameter
+    q: 1.0                  # In-out parameter
+
+# ── Training ──────────────────────────────────────────────────────────────────
+training:
+  device: "cuda"            # "cuda" hoặc "cpu"
+  epochs: 500
+  learning_rate: 0.001
+  weight_decay: 5.0e-4
+  batch_size: null          # null = full batch (graph nhỏ)
+  early_stopping:
+    enabled: true
+    patience: 50
+    monitor: "val_aupr"     # Metric để early stopping
+    mode: "max"
+  scheduler:
+    type: "cosine"          # "cosine", "step", "none"
+    T_max: 200              # Cho CosineAnnealingLR
+  random_seed: 42
+  save_best_model: true
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+evaluation:
+  metrics: ["auroc", "aupr", "f1", "precision", "recall"]
+  survival_analysis:
+    enabled: true
+    clinical_endpoint: "OS" # Overall Survival
+    significance_threshold: 0.05  # p-value cho log-rank test
+  network_viz:
+    hub_gene_top_k: 20      # Top-K gen có độ kết nối cao nhất (hub genes)
+    layout: "spring"        # networkx layout algorithm
