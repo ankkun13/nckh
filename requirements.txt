@@ -1,0 +1,44 @@
+# ============================================================================
+# GNN Cancer Driver Gene Identification Pipeline — Dependencies
+# ============================================================================
+# Install: pip install -r requirements.txt
+#
+# For PyTorch with CUDA (cu118):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+# For PyTorch with CUDA (cu121):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#
+# For PyG (after installing torch):
+#   pip install torch-geometric
+#   pip install torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-{TORCH}+{CUDA}.html
+# ============================================================================
+
+# --- Deep Learning & GNN ---
+torch>=2.0.0
+torch-geometric>=2.4.0
+torch-scatter>=2.1.0
+torch-sparse>=0.6.18
+torchmetrics>=1.0.0
+
+# --- Scientific Computing ---
+numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.11.0
+scikit-learn>=1.3.0
+
+# --- Graph Analysis ---
+networkx>=3.0
+
+# --- Visualization ---
+matplotlib>=3.7.0
+seaborn>=0.12.0
+lifelines>=0.27.0
+umap-learn>=0.5.0
+
+# --- Data I/O ---
+h5py>=3.9.0
+pyyaml>=6.0
+
+# --- Utilities ---
+tqdm>=4.65.0
+requests>=2.31.0

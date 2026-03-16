@@ -1,0 +1,83 @@
+# ============================================================================
+# GNN Cancer Driver Gene Identification Pipeline — Configuration
+# ============================================================================
+
+# --- Data Configuration ---
+data:
+  base_path: "./ai-agent/data"
+  cancer_type: "TCGA-LUAD"
+  supported_cancers:
+    - "TCGA-BLCA"
+    - "TCGA-BRCA"
+    - "TCGA-COAD"
+    - "TCGA-HNSC"
+    - "TCGA-KIRC"
+    - "TCGA-KIRP"
+    - "TCGA-LUAD"
+    - "TCGA-LUSC"
+    - "TCGA-PRAD"
+    - "TCGA-UCEC"
+  ppi_network: "string_full_v12_0.7.txt"
+  driver_genes: "579_CGC.txt"
+  non_driver_genes: "2179_non_driver_genes.txt"
+  github_storage_url: "https://github.com/ankkun13/dataset-for-nckh/blob/main/nckh.tar.gz" # Placeholder URL
+
+# --- Preprocessing ---
+preprocessing:
+  normalization: "zscore"        # zscore | minmax
+  na_strategy: "drop"            # drop | impute_median | impute_zero
+  mutation_freq_min: 10          # Min mutation count per sample
+  mutation_freq_max_ratio: 0.15  # Max mutation ratio across genes
+
+# --- Clustering (Spectral Clustering via SNF) ---
+clustering:
+  n_clusters: 3                  # Number of patient subgroups (auto if -1)
+  snf_k_neighbors: 20            # K for affinity matrix
+  snf_alpha: 0.5                 # Hyperparameter for affinity
+  snf_iterations: 20             # Number of SNF iterations
+  top_variance_genes: 30         # Top genes by variance for clustering
+
+# --- Network Builder (CORE IMPROVEMENT) ---
+network:
+  method: "random_forest"        # random_forest | mutual_information
+  threshold_percentile: 90       # Dynamic edge threshold (top 10%)
+  net_split: 0.2                 # Differential co-association threshold
+  ppi_weight_type: 2             # 0=none, 1=binary, 2=sigmoid, 3=linear
+  ppi_threshold: 0.7             # PPI score threshold quantile
+  n_estimators: 100              # RF trees (if method=random_forest)
+  n_jobs: -1                     # Parallel jobs for RF/MI (-1 = all cores)
+
+# --- GNN Model ---
+model:
+  conv_type: "GCN"               # GCN | GAT
+  hidden_channels: [64, 128]
+  num_classes: 2
+  dropout: 0.5
+  use_residual: true             # Skip connections (anti over-smoothing)
+
+# --- Training ---
+training:
+  epochs: 1000
+  learning_rate: 0.001
+  weight_decay: 0.0005
+  early_stopping_patience: 100
+  early_stopping_min_epoch: 500
+  cv_folds: 10
+  device: "auto"                 # auto | cuda | cpu
+
+# --- Focal Loss ---
+focal_loss:
+  alpha: 0.25
+  gamma: 2.0
+
+# --- Evaluation ---
+evaluation:
+  save_plots: true
+  results_dir: "./results"
+  plot_formats: ["png"]
+
+# --- Logging ---
+logging:
+  log_file: "./execution.log"
+  log_level: "INFO"              # DEBUG | INFO | WARNING | ERROR
+  log_tensor_sizes: true
