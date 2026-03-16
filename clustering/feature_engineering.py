@@ -11,6 +11,7 @@ import numpy as np
 import networkx as nx
 from sklearn.preprocessing import MinMaxScaler
 
+from joblib import parallel_backend
 from utils.logger import log_tensor_info
 
 
@@ -190,9 +191,29 @@ class GeneFeatureExtractor:
         clustering_coeff = nx.clustering(G)
         
         # Closeness and betweenness can be expensive, compute only for relevant genes
-        closeness_cent = nx.closeness_centrality(G)
-        betweenness_cent = nx.betweenness_centrality(G, normalized=True)
         
+        # closeness_cent = nx.closeness_centrality(G)
+        # Lấy largest connected component
+        # largest_cc = max(nx.connected_components(G), key=len)
+        # G_largest = G.subgraph(largest_cc).copy()
+
+        # # Tính closeness chỉ cho component này
+        # closeness_cent_partial = nx.closeness_centrality(G_largest)
+
+        # # Gen ngoài component có closeness = 0
+        # closeness_cent = {node: closeness_cent_partial.get(node, 0) 
+        #             for node in G.nodes()}
+
+        logger.info("Computing betweenness centrality (approximate with k=1000)...")
+        # Chạy betweenness trên multi-core
+        with parallel_backend('threading', n_jobs=4):
+            betweenness_cent = nx.betweenness_centrality(
+                G,
+                normalized=True,
+                k=min(1000, G.number_of_nodes()),  # Approximate for large graphs
+                seed=42
+            )
+
         gene_name_to_idx = {g: i for i, g in enumerate(gene_names)}
         
         for gene in ppi_genes:
@@ -200,9 +221,8 @@ class GeneFeatureExtractor:
                 idx = gene_name_to_idx[gene]
                 features[idx, 0] = degree_cent.get(gene, 0)
                 features[idx, 1] = clustering_coeff.get(gene, 0)
-                features[idx, 2] = closeness_cent.get(gene, 0)
-                features[idx, 3] = betweenness_cent.get(gene, 0)
+                features[idx, 2] = betweenness_cent.get(gene, 0)
         
-        feat_names = ["deg_cent", "clu_coef", "clo_cent", "bet_cent"]
+        feat_names = ["deg_cent", "clu_coef", "bet_cent"]
         
         return features, feat_names
