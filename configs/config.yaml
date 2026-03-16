@@ -4,7 +4,7 @@
 
 # --- Data Configuration ---
 data:
-  base_path: "./ai-agent/data"
+  base_path: "./data"
   cancer_type: "TCGA-LUAD"
   supported_cancers:
     - "TCGA-BLCA"
@@ -20,7 +20,7 @@ data:
   ppi_network: "string_full_v12_0.7.txt"
   driver_genes: "579_CGC.txt"
   non_driver_genes: "2179_non_driver_genes.txt"
-  github_storage_url: "https://github.com/ankkun13/dataset-for-nckh/blob/main/nckh.tar.gz" # Placeholder URL
+  github_storage_url: "https://github.com/ankkun13/dataset-for-nckh/raw/main/nckh.tar.gz" # Placeholder URL
 
 # --- Preprocessing ---
 preprocessing:
