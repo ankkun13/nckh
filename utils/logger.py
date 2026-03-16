@@ -72,12 +72,31 @@ def log_tensor_info(logger: logging.Logger, name: str, data, level: str = "info"
     log_fn = getattr(logger, level.lower(), logger.info)
     
     if isinstance(data, np.ndarray):
-        log_fn(
-            "[TENSOR] %s | type=ndarray | shape=%s | dtype=%s | "
-            "min=%.4f | max=%.4f | nan_count=%d",
-            name, data.shape, data.dtype,
-            np.nanmin(data), np.nanmax(data), np.isnan(data).sum()
-        )
+        # Check if data is numeric type
+        if np.issubdtype(data.dtype, np.number):
+            try:
+                log_fn(
+                    "[TENSOR] %s | type=ndarray | shape=%s | dtype=%s | "
+                    "min=%.4f | max=%.4f | nan_count=%d",
+                    name, data.shape, data.dtype,
+                    np.nanmin(data), np.nanmax(data), np.isnan(data).sum()
+                )
+            except (TypeError, ValueError):
+                # Fallback if still fails
+                log_fn(
+                    "[TENSOR] %s | type=ndarray | shape=%s | dtype=%s",
+                    name, data.shape, data.dtype
+                )
+        else:
+            # Non-numeric data (strings, objects, etc.)
+            try:
+                unique_count = len(np.unique(data))
+            except TypeError:
+                unique_count = "N/A"
+            log_fn(
+                "[TENSOR] %s | type=ndarray | shape=%s | dtype=%s | unique_count=%s",
+                name, data.shape, data.dtype, unique_count
+            )
     elif hasattr(data, 'shape') and hasattr(data, 'dtype'):
         # torch.Tensor
         import torch
