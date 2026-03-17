@@ -14,10 +14,11 @@
 # ============================================================================
 
 # --- Deep Learning & GNN ---
-torch>=2.0.0
-torch-geometric>=2.4.0
-torch-scatter>=2.1.0
-torch-sparse>=0.6.18
+# Thu vien nay se tai thong qua makefile
+# torch>=2.0.0
+# torch-geometric>=2.4.0
+# torch-scatter>=2.1.0
+# torch-sparse>=0.6.18
 torchmetrics>=1.0.0
 
 # --- Scientific Computing ---
