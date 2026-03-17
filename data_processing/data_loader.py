@@ -169,9 +169,17 @@ class MultiOmicsDataLoader:
         
         if not data_file.exists():
             logger.warning("Data file not found: %s", data_file)
-            return np.array([]), np.array([]), np.array([])
+            return np.zeros((0, 0), dtype=np.float32), np.array([]), np.array([])
         
-        matrix = pd.read_csv(data_file, sep='\t', header=None).values.astype(np.float32)
+        try:
+            matrix = pd.read_csv(data_file, sep='\t', header=None).values.astype(np.float32)
+            # Ensure matrix is 2D even if 1 sample
+            if matrix.ndim == 1:
+                matrix = matrix.reshape(-1, 1)
+        except Exception as e:
+            logger.error("Error loading %s: %s", data_file, e)
+            return np.zeros((0, 0), dtype=np.float32), np.array([]), np.array([])
+        
         genes = pd.read_csv(gene_file, sep='\t', header=None).iloc[:, 0].values
         samples = pd.read_csv(sample_file, sep='\t', header=None).iloc[:, 0].values
         
@@ -187,9 +195,15 @@ class MultiOmicsDataLoader:
         
         if not data_file.exists():
             logger.warning("CNV data file not found: %s", data_file)
-            return np.array([]), np.array([]), np.array([])
+            return np.zeros((0, 0), dtype=np.float32), np.array([]), np.array([])
         
-        matrix = pd.read_csv(data_file, sep='\t', header=None).values.astype(np.float32)
+        try:
+            matrix = pd.read_csv(data_file, sep='\t', header=None).values.astype(np.float32)
+            if matrix.ndim == 1: matrix = matrix.reshape(-1, 1)
+        except Exception as e:
+            logger.error("Error loading CNV %s: %s", data_file, e)
+            return np.zeros((0, 0), dtype=np.float32), np.array([]), np.array([])
+
         genes = pd.read_csv(gene_file, sep='\t', header=None).iloc[:, 0].values
         samples = pd.read_csv(sample_file, sep='\t', header=None).iloc[:, 0].values
         return matrix, genes, samples
@@ -203,9 +217,15 @@ class MultiOmicsDataLoader:
         
         if not data_file.exists():
             logger.warning("SNV data file not found: %s", data_file)
-            return np.array([]), np.array([]), np.array([])
+            return np.zeros((0, 0), dtype=np.float32), np.array([]), np.array([])
         
-        matrix = pd.read_csv(data_file, sep='\t', header=None).values.astype(np.float32)
+        try:
+            matrix = pd.read_csv(data_file, sep='\t', header=None).values.astype(np.float32)
+            if matrix.ndim == 1: matrix = matrix.reshape(-1, 1)
+        except Exception as e:
+            logger.error("Error loading SNV %s: %s", data_file, e)
+            return np.zeros((0, 0), dtype=np.float32), np.array([]), np.array([])
+
         genes = pd.read_csv(gene_file, sep='\t', header=None).iloc[:, 0].values
         samples = pd.read_csv(sample_file, sep='\t', header=None).iloc[:, 0].values
         return matrix, genes, samples
@@ -219,9 +239,15 @@ class MultiOmicsDataLoader:
         
         if not data_file.exists():
             logger.warning("Mutation data file not found: %s", data_file)
-            return np.array([]), np.array([]), np.array([])
+            return np.zeros((0, 0), dtype=np.float32), np.array([]), np.array([])
         
-        matrix = pd.read_csv(data_file, sep='\t', header=None).values.astype(np.float32)
+        try:
+            matrix = pd.read_csv(data_file, sep='\t', header=None).values.astype(np.float32)
+            if matrix.ndim == 1: matrix = matrix.reshape(-1, 1)
+        except Exception as e:
+            logger.error("Error loading Mutation %s: %s", data_file, e)
+            return np.zeros((0, 0), dtype=np.float32), np.array([]), np.array([])
+
         genes = pd.read_csv(gene_file, sep='\t', header=None).iloc[:, 0].values
         samples = pd.read_csv(sample_file, sep='\t', header=None).iloc[:, 0].values
         return matrix, genes, samples
@@ -235,9 +261,15 @@ class MultiOmicsDataLoader:
         
         if not data_file.exists():
             logger.warning("Normal %s data not found: %s", data_type, data_file)
-            return np.array([]), np.array([]), np.array([])
+            return np.zeros((0, 0), dtype=np.float32), np.array([]), np.array([])
         
-        matrix = pd.read_csv(data_file, sep='\t', header=None).values.astype(np.float32)
+        try:
+            matrix = pd.read_csv(data_file, sep='\t', header=None).values.astype(np.float32)
+            if matrix.ndim == 1: matrix = matrix.reshape(-1, 1)
+        except Exception as e:
+            logger.error("Error loading normal %s %s: %s", data_type, data_file, e)
+            return np.zeros((0, 0), dtype=np.float32), np.array([]), np.array([])
+
         genes = pd.read_csv(gene_file, sep='\t', header=None).iloc[:, 0].values
         
         if sample_file.exists():
