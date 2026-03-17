@@ -31,8 +31,9 @@ ENV/
 
 # --- Project Specific ---
 ai-agent/data/
+data/
 results/
-execution.log
+
 
 # --- OS / IDE ---
 .DS_Store
