@@ -30,7 +30,7 @@ venv/
 ENV/
 
 # --- Project Specific ---
-ai-agent/data/
+# ai-agent/data/
 data/
 results/
 
