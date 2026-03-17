@@ -39,12 +39,12 @@ clustering:
 
 # --- Network Builder (CORE IMPROVEMENT) ---
 network:
-  method: "random_forest"        # random_forest | mutual_information
-  threshold_percentile: 90       # Dynamic edge threshold (top 10%)
-  net_split: 0.2                 # Differential co-association threshold
+  method: "mutual_information"        # random_forest | mutual_information
+  threshold_percentile: 75       # Dynamic edge threshold (top 10%)
+  net_split: 0.1                 # Differential co-association threshold
   ppi_weight_type: 2             # 0=none, 1=binary, 2=sigmoid, 3=linear
-  ppi_threshold: 0.7             # PPI score threshold quantile
-  n_estimators: 100              # RF trees (if method=random_forest)
+  ppi_threshold: 3             # PPI score threshold quantile
+  n_estimators: 50              # RF trees (if method=random_forest)
   n_jobs: -1                     # Parallel jobs for RF/MI (-1 = all cores)
 
 # --- GNN Model ---
