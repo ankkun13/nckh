@@ -206,7 +206,7 @@ class GeneFeatureExtractor:
 
         logger.info("Computing betweenness centrality (approximate with k=1000)...")
         # Chạy betweenness trên multi-core
-        with parallel_backend('threading', n_jobs=4):
+        with parallel_backend('threading', n_jobs=self.config.get('n_jobs', -1)):
             betweenness_cent = nx.betweenness_centrality(
                 G,
                 normalized=True,
