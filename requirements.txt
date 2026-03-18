@@ -14,7 +14,7 @@
 # ============================================================================
 
 # --- Deep Learning & GNN ---
-# Thu vien nay se tai thong qua makefile
+# These libraries are installed via install_dependencies.sh
 # torch>=2.0.0
 # torch-geometric>=2.4.0
 # torch-scatter>=2.1.0

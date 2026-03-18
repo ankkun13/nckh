@@ -58,15 +58,20 @@ echo ""
 PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
 echo -e "${GREEN}Python version:${NC} $PYTHON_VERSION"
 
-# Check CUDA availability
-python3 -c "
+if ! python3 -c "import torch" 2>/dev/null; then
+    echo -e "${YELLOW}PyTorch not installed. Please run 'make setup' or './install_dependencies.sh' first.${NC}"
+    # Optional: read -p "Would you like to install dependencies now? (y/n) " -n 1 -r
+    # if [[ $REPLY =~ ^[Yy]$ ]]; then ./install_dependencies.sh; else exit 1; fi
+else
+    python3 -c "
 import torch
 if torch.cuda.is_available():
     print(f'CUDA available: {torch.cuda.get_device_name(0)}')
     print(f'CUDA version: {torch.version.cuda}')
 else:
     print('CUDA not available, using CPU')
-" 2>/dev/null || echo -e "${YELLOW}PyTorch not installed yet${NC}"
+"
+fi
 
 echo ""
 

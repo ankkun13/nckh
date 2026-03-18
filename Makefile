@@ -23,8 +23,8 @@ help: ## Show available targets
 
 all: preprocess cluster network train evaluate ## Run full pipeline
 
-setup: ## Install dependencies
-	pip install -r requirements.txt
+setup: ## Install dependencies including torch and torch-geometric
+	./install_dependencies.sh
 	@echo "✓ Dependencies installed"
 
 preprocess: ## Stage 2: Data loading & preprocessing
