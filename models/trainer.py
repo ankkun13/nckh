@@ -81,7 +81,7 @@ class GNNTrainer:
         gene_features = data['gene_features']
         gene_labels = data['gene_labels']  # (n_genes, 2): [is_driver, is_labeled]
         graph_data = data['graph_data']
-        hp_graph = graph_data['hp_graph']
+        co_data_net = graph_data['co_data_net']
         
         n_genes = gene_features.shape[0]
         n_features = gene_features.shape[1]
@@ -93,8 +93,8 @@ class GNNTrainer:
         logger.info("  Model: %s, Hidden: %s, Residual: %s",
                      self.conv_type, self.hidden_channels, self.use_residual)
         
-        # Prepare edge indices from hypergraph adjacency
-        edge_indices, edge_weights = self._adjacency_to_edge_index(hp_graph)
+        # Prepare edge indices from sparse adjacency matrices (Stay on CPU for now)
+        edge_indices, edge_weights = self._adjacency_to_edge_index(co_data_net)
         
         # Prepare labels and masks
         y_label = gene_labels[:, 0]  # Driver labels
@@ -105,13 +105,20 @@ class GNNTrainer:
                      len(labeled_idx), y_label[labeled_idx].sum(),
                      len(labeled_idx) - y_label[labeled_idx].sum())
         
+        # ✅ OPTIMIZATION: Move static data to device ONCE
+        logger.info("  Moving static data to %s...", self.device)
+        x_device = torch.FloatTensor(gene_features).to(self.device)
+        edge_idx_device = [ei.to(self.device) for ei in edge_indices]
+        edge_w_device = [ew.to(self.device) for ew in edge_weights] if edge_weights else None
+        y_label_full_t = torch.FloatTensor(y_label).to(self.device)
+        
         # Split: 75% train+val, 25% test (fixed)
         kf_outer = StratifiedKFold(n_splits=4, shuffle=True, random_state=42)
         outer_splits = list(kf_outer.split(labeled_idx, y_label[labeled_idx]))
         train_val_idx, test_idx = labeled_idx[outer_splits[0][0]], labeled_idx[outer_splits[0][1]]
         
-        test_mask = self._make_mask(n_genes, test_idx)
-        y_test = self._make_y(y_label, test_idx, n_genes)
+        test_mask_t = torch.BoolTensor(self._make_mask(n_genes, test_idx)).to(self.device)
+        y_test_t = torch.FloatTensor(self._make_y(y_label, test_idx, n_genes)).to(self.device)
         
         # K-fold CV on train+val
         kf = StratifiedKFold(n_splits=self.cv_folds, shuffle=True, random_state=42)
@@ -132,19 +139,20 @@ class GNNTrainer:
             train_idx = train_val_idx[train_split]
             val_idx = train_val_idx[val_split]
             
-            train_mask = self._make_mask(n_genes, train_idx)
-            val_mask = self._make_mask(n_genes, val_idx)
-            y_train = self._make_y(y_label, train_idx, n_genes)
-            y_val = self._make_y(y_label, val_idx, n_genes)
+            train_mask_t = torch.BoolTensor(self._make_mask(n_genes, train_idx)).to(self.device)
+            val_mask_t = torch.BoolTensor(self._make_mask(n_genes, val_idx)).to(self.device)
+            y_train_t = torch.FloatTensor(self._make_y(y_label, train_idx, n_genes)).to(self.device)
+            y_val_t = torch.FloatTensor(self._make_y(y_label, val_idx, n_genes)).to(self.device)
             
             logger.info("  Train: %d, Val: %d, Test: %d",
                          len(train_idx), len(val_idx), len(test_idx))
             
             # Build and train model
             model, test_perf, all_perf, preds = self._single_cv_run(
-                gene_features, edge_indices, edge_weights,
-                y_train, train_mask, y_val, val_mask,
-                y_test, test_mask, y_label, n_slices, cv_run
+                x_device, edge_idx_device, edge_w_device,
+                y_train_t, train_mask_t, y_val_t, val_mask_t,
+                y_test_t, test_mask_t, y_label_full_t,
+                n_slices, cv_run
             )
             
             performance_measures.append({
@@ -158,11 +166,15 @@ class GNNTrainer:
                 best_overall_aupr = test_perf['aupr']
                 best_model_state = copy.deepcopy(model.state_dict())
             
-            # Cleanup
-            del model
+            # Cleanup Fold
+            del model, train_mask_t, val_mask_t, y_train_t, y_val_t
             if self.device.type == 'cuda':
                 torch.cuda.empty_cache()
             gc.collect()
+        
+        # Full Cleanup
+        del x_device, edge_idx_device, edge_w_device, y_label_full_t, test_mask_t, y_test_t
+        gc.collect()
         
         # Summary
         avg_auc = np.mean([pm['test_metrics']['auc'] for pm in performance_measures])
@@ -185,14 +197,14 @@ class GNNTrainer:
         
         return results
     
-    def _single_cv_run(self, gene_features, edge_indices, edge_weights,
-                        y_train, train_mask, y_val, val_mask,
-                        y_test, test_mask, y_label_full,
+    def _single_cv_run(self, x, edge_indices, edge_weights,
+                        y_train_t, train_mask_t, y_val_t, val_mask_t,
+                        y_test_t, test_mask_t, y_label_full_t,
                         n_slices, cv_run):
         """Train and evaluate a single CV fold."""
         
-        n_genes = gene_features.shape[0]
-        n_features = gene_features.shape[1]
+        n_features = x.shape[1]
+        n_genes = x.shape[0]
         
         # Build model
         model = DriverGeneGNN(
@@ -205,31 +217,19 @@ class GNNTrainer:
             use_residual=self.use_residual
         ).to(self.device)
         
-        # Prepare tensors
-        x = torch.FloatTensor(gene_features).to(self.device)
-        edge_idx_device = [ei.to(self.device) for ei in edge_indices]
-        edge_w_device = [ew.to(self.device) for ew in edge_weights] if edge_weights else None
-        
-        y_train_t = torch.FloatTensor(y_train).to(self.device)
-        y_val_t = torch.FloatTensor(y_val).to(self.device)
-        y_test_t = torch.FloatTensor(y_test).to(self.device)
-        train_mask_t = torch.BoolTensor(train_mask).to(self.device)
-        val_mask_t = torch.BoolTensor(val_mask).to(self.device)
-        test_mask_t = torch.BoolTensor(test_mask).to(self.device)
-        
         # Loss and optimizer
         criterion = FocalLoss(alpha=self.focal_alpha, gamma=self.focal_gamma)
         optimizer = Adam(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         
         # Training loop
         best_val_aupr = 0
-        best_model = copy.deepcopy(model)
+        best_model_state = copy.deepcopy(model.state_dict())
         patience_counter = 0
         
         for epoch in range(1, self.epochs + 1):
             model.train()
             
-            logits, probs = model(x, edge_idx_device, edge_w_device)
+            logits, probs = model(x, edge_indices, edge_weights)
             
             loss = criterion(
                 logits[train_mask_t],
@@ -243,8 +243,8 @@ class GNNTrainer:
             # Validation
             if epoch % 10 == 0 or epoch == 1:
                 model.eval()
-                with torch.no_grad():
-                    _, val_probs = model(x, edge_idx_device, edge_w_device)
+                with torch.inference_mode():
+                    _, val_probs = model(x, edge_indices, edge_weights)
                 
                 val_metrics = self._compute_metrics(
                     val_probs, y_val_t, val_mask_t
@@ -252,7 +252,7 @@ class GNNTrainer:
                 
                 if val_metrics['aupr'] > best_val_aupr and epoch >= self.min_epoch:
                     best_val_aupr = val_metrics['aupr']
-                    best_model = copy.deepcopy(model)
+                    best_model_state = copy.deepcopy(model.state_dict())
                     patience_counter = 0
                     
                     logger.info(
@@ -269,30 +269,35 @@ class GNNTrainer:
                     )
                 
                 # Early stopping
-                if patience_counter > self.early_patience // 10:
-                    logger.info("  Early stopping at epoch %d", epoch)
+                if patience_counter * 10 >= self.early_patience:
+                    logger.info("  Early stopping at epoch %d (No improvement for %d epochs)", 
+                                epoch, self.early_patience)
                     break
             
-            # CUDA OOM prevention
+            # CUDA memory management
             if self.device.type == 'cuda' and epoch % 100 == 0:
                 torch.cuda.empty_cache()
         
-        # Evaluate best model
-        best_model.eval()
-        with torch.no_grad():
-            _, test_probs = best_model(x, edge_idx_device, edge_w_device)
+        # Load best weights for evaluation
+        model.load_state_dict(best_model_state)
+        model.eval()
+        
+        with torch.inference_mode():
+            _, test_probs = model(x, edge_indices, edge_weights)
         
         test_metrics = self._compute_metrics(test_probs, y_test_t, test_mask_t)
         logger.info("  Test: auc=%.4f, aupr=%.4f", test_metrics['auc'], test_metrics['aupr'])
         
         # All-gene predictions
         all_mask = torch.ones(n_genes, dtype=torch.bool, device=self.device)
-        y_full = torch.FloatTensor(y_label_full).to(self.device)
-        all_metrics = self._compute_metrics(test_probs, y_full, all_mask)
+        all_metrics = self._compute_metrics(test_probs, y_label_full_t, all_mask)
         
         predictions = test_probs.cpu().detach().numpy()
         
-        return best_model, test_metrics, all_metrics, predictions
+        # Cleanup
+        del best_model_state, x, edge_indices, edge_weights
+        
+        return model, test_metrics, all_metrics, predictions
     
     def _compute_metrics(self, probs: torch.Tensor, labels: torch.Tensor,
                           mask: torch.Tensor) -> dict:
@@ -300,8 +305,8 @@ class GNNTrainer:
         probs_np = probs[mask].cpu().detach().numpy()
         labels_np = labels[mask].cpu().detach().numpy().astype(int)
         
-        # Need positive samples to compute AUC/AUPR
-        if labels_np.sum() == 0 or labels_np.sum() == len(labels_np):
+        # Need positive and negative samples to compute AUC/AUPR
+        if labels_np.size == 0 or labels_np.sum() == 0 or labels_np.sum() == len(labels_np):
             return {'auc': 0.0, 'aupr': 0.0, 'acc': 0.0}
         
         try:
@@ -314,23 +319,24 @@ class GNNTrainer:
         
         return {'auc': auc, 'aupr': aupr, 'acc': acc}
     
-    def _adjacency_to_edge_index(self, hp_graph: np.ndarray) -> tuple:
+    def _adjacency_to_edge_index(self, adjacency_list: list) -> tuple:
         """
-        Convert 3D hypergraph adjacency (n_genes x n_genes x n_slices)
+        Convert list of sparse adjacency matrices (scipy.sparse)
         to PyG edge_index format.
         
         Returns:
             edge_indices: List of (2 x n_edges) tensors
             edge_weights: List of (n_edges,) tensors
         """
-        n_slices = hp_graph.shape[2]
+        n_slices = len(adjacency_list)
         edge_indices = []
         edge_weights = []
         
         for s in range(n_slices):
-            adj = hp_graph[:, :, s]
-            rows, cols = np.nonzero(adj)
-            values = adj[rows, cols]
+            adj = adjacency_list[s].tocoo()
+            rows = adj.row
+            cols = adj.col
+            values = adj.data
             
             edge_index = torch.LongTensor(np.vstack([rows, cols]))
             edge_weight = torch.FloatTensor(values)
