@@ -63,7 +63,7 @@ class GNNTrainer:
         if self.device.type == 'cuda':
             logger.info("CUDA device: %s", torch.cuda.get_device_name(0))
             logger.info("CUDA memory: %.2f GB",
-                         torch.cuda.get_device_properties(0).total_mem / 1e9)
+                         torch.cuda.get_device_properties(0).total_memory / 1e9)
     
     def train_with_cv(self, data: dict) -> dict:
         """
