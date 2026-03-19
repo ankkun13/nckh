@@ -162,6 +162,9 @@ def parse_args():
 
 def main():
     """Main pipeline entry point."""
+    # ✅ OPTIMIZATION: Reduce memory fragmentation
+    os.environ['PYTORCH_ALLOC_CONF'] = 'expandable_segments:True'
+    
     args = parse_args()
     
     # Load configuration
