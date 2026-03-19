@@ -32,6 +32,7 @@ STAGE="all"
 EXTRA_ARGS=""
 
 # Parse arguments
+ALL_CANCERS=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --config)
@@ -41,6 +42,10 @@ while [[ $# -gt 0 ]]; do
         --stage)
             STAGE="$2"
             shift 2
+            ;;
+        --all-cancers)
+            ALL_CANCERS=true
+            shift
             ;;
         *)
             EXTRA_ARGS="$EXTRA_ARGS $1"
@@ -54,6 +59,7 @@ echo -e "${CYAN}  GNN Cancer Driver Gene Identification Pipeline${NC}"
 echo -e "${CYAN}============================================================================${NC}"
 echo -e "${GREEN}Config:${NC} $CONFIG_FILE"
 echo -e "${GREEN}Stage:${NC}  $STAGE"
+echo -e "${GREEN}All Cancers:${NC} $ALL_CANCERS"
 echo -e "${GREEN}Extra:${NC}  $EXTRA_ARGS"
 echo ""
 
@@ -63,8 +69,6 @@ echo -e "${GREEN}Python version:${NC} $PYTHON_VERSION"
 
 if ! python3 -c "import torch" 2>/dev/null; then
     echo -e "${YELLOW}PyTorch not installed. Please run 'make setup' or './install_dependencies.sh' first.${NC}"
-    # Optional: read -p "Would you like to install dependencies now? (y/n) " -n 1 -r
-    # if [[ $REPLY =~ ^[Yy]$ ]]; then ./install_dependencies.sh; else exit 1; fi
 else
     python3 -c "
 import torch
@@ -81,43 +85,48 @@ echo ""
 # Execute pipeline
 run_stage() {
     local stage_name=$1
+    local current_cancer=${2:-}
+    local cancer_arg=""
+    if [[ -n "$current_cancer" ]]; then
+        cancer_arg="--cancer $current_cancer"
+    fi
+
     echo -e "${CYAN}──────────────────────────────────────────────────────────────────────────${NC}"
-    echo -e "${GREEN}▶ Running stage: ${stage_name}${NC}"
+    echo -e "${GREEN}▶ Running stage: ${stage_name}${NC} ${YELLOW}${current_cancer:+[Cancer: $current_cancer]}${NC}"
     echo -e "${CYAN}──────────────────────────────────────────────────────────────────────────${NC}"
-    python3 main.py --config "$CONFIG_FILE" --stage "$stage_name" $EXTRA_ARGS
+    python3 main.py --config "$CONFIG_FILE" --stage "$stage_name" $cancer_arg $EXTRA_ARGS
     echo -e "${GREEN}✓ Stage ${stage_name} completed${NC}"
     echo ""
 }
 
-case $STAGE in
-    preprocess)
-        run_stage "preprocess"
-        ;;
-    cluster)
-        run_stage "cluster"
-        ;;
-    network)
-        run_stage "network"
-        ;;
-    train)
-        run_stage "train"
-        ;;
-    evaluate)
-        run_stage "evaluate"
-        ;;
-    all)
-        run_stage "preprocess"
-        run_stage "cluster"
-        run_stage "network"
-        run_stage "train"
-        run_stage "evaluate"
-        ;;
-    *)
-        echo -e "${RED}Unknown stage: $STAGE${NC}"
-        echo "Valid stages: preprocess, cluster, network, train, evaluate, all"
-        exit 1
-        ;;
-esac
+execute_all_stages() {
+    local cancer=$1
+    run_stage "preprocess" "$cancer"
+    run_stage "cluster" "$cancer"
+    run_stage "network" "$cancer"
+    run_stage "train" "$cancer"
+    run_stage "evaluate" "$cancer"
+}
+
+if [[ "$ALL_CANCERS" == "true" ]]; then
+    CANCER_TYPES=$(python3 -c "import yaml; config = yaml.safe_load(open('$CONFIG_FILE')); print(' '.join(config['data']['supported_cancers']))")
+    echo -e "${YELLOW}Running pipeline for ALL cancers: $CANCER_TYPES${NC}"
+    for CANCER in $CANCER_TYPES; do
+        echo -e "${YELLOW}>>> PROCESSING CANCER: $CANCER <<<${NC}"
+        if [[ "$STAGE" == "all" ]]; then
+            execute_all_stages "$CANCER"
+        else
+            run_stage "$STAGE" "$CANCER"
+        fi
+    done
+else
+    # Single cancer run (uses config default or --cancer in EXTRA_ARGS)
+    if [[ "$STAGE" == "all" ]]; then
+        execute_all_stages ""
+    else
+        run_stage "$STAGE" ""
+    fi
+fi
 
 echo -e "${CYAN}============================================================================${NC}"
 echo -e "${GREEN}Pipeline completed successfully!${NC}"

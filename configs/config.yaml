@@ -31,11 +31,11 @@ preprocessing:
 
 # --- Clustering (Spectral Clustering via SNF) ---
 clustering:
-  n_clusters: 3                  # Number of patient subgroups (auto if -1)
+  n_clusters: -1                 # Number of patient subgroups (auto if -1)
   snf_k_neighbors: 20            # K for affinity matrix
   snf_alpha: 0.5                 # Hyperparameter for affinity
   snf_iterations: 20             # Number of SNF iterations
-  top_variance_genes: 30         # Top genes by variance for clustering
+  top_variance_genes: 3000       # Top genes by variance for clustering
 
 # --- Network Builder (CORE IMPROVEMENT) ---
 network:
@@ -46,8 +46,8 @@ network:
   ppi_threshold: 0.7             # PPI score threshold quantile
   n_estimators: 50              # RF trees (if method=random_forest)
   n_jobs: -1                     # Parallel jobs for RF/MI (-1 = all cores)
-  top_k_genes: 2000              # Max genes for importance computation (by variance)
-  max_features_mi: 1000           # Max features per gene for MI/RF (subsampling)
+  top_k_genes: 20000              # Max genes for importance computation (by variance)
+  max_features_mi: 2000           # Max features per gene for MI/RF (subsampling)
 
 # --- GNN Model ---
 model:
@@ -75,7 +75,7 @@ focal_loss:
 # --- Evaluation ---
 evaluation:
   save_plots: true
-  results_dir: "./results"
+  results_dir: "./results"        # Base directory for outputs
   plot_formats: ["png"]
 
 # --- Logging ---

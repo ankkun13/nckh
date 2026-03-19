@@ -266,7 +266,7 @@ class RobustCoAssociationNetwork:
 
         # ✅ OPTIMIZATION 3: Cap max edges to prevent explosive memory growth
         # 1M edges is roughly 12MB in sparse, well within 8GB limit.
-        MAX_EDGES = 1_000_000
+        MAX_EDGES = 2_000_000
         if importance_sparse.nnz > MAX_EDGES:
             logger.warning("  ⚠️ Slice too dense (%d edges), pruning to top %d",
                            importance_sparse.nnz, MAX_EDGES)

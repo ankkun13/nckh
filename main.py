@@ -119,7 +119,11 @@ def run_evaluate(config: dict, processed_data: dict, train_results: dict, logger
     from evaluation.metrics import MetricsCalculator
     from evaluation.visualizer import ResultVisualizer
     
-    results_dir = config['evaluation']['results_dir']
+    # Organise results by cancer type
+    cancer_type = config['data']['cancer_type']
+    base_results_dir = config['evaluation']['results_dir']
+    results_dir = os.path.join(base_results_dir, cancer_type)
+    
     os.makedirs(results_dir, exist_ok=True)
     
     metrics_calc = MetricsCalculator(config)
