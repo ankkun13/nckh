@@ -63,7 +63,7 @@ class DriverGeneGNN(nn.Module):
             prev_dim = in_channels
             for i, h_dim in enumerate(hidden_channels):
                 if conv_type == 'GCN':
-                    layers.append(GCNConv(prev_dim, h_dim))
+                    layers.append(GCNConv(prev_dim, h_dim, add_self_loops=False))
                 elif conv_type == 'GAT':
                     # GAT with 4 attention heads, concatenated
                     heads = 4 if i < len(hidden_channels) - 1 else 1
@@ -85,7 +85,7 @@ class DriverGeneGNN(nn.Module):
         
         # Batch normalization per layer
         self.batch_norms = nn.ModuleList([
-            nn.BatchNorm1d(h_dim) for h_dim in hidden_channels
+            nn.BatchNorm1d(h_dim, eps=1e-5) for h_dim in hidden_channels
         ])
         
         # Classification head
@@ -136,6 +136,9 @@ class DriverGeneGNN(nn.Module):
                 if self.use_residual:
                     h_res = self.residual_projs[s][layer_idx](h)
                     h_new = h_new + h_res
+                
+                # ✅ SAFETY: Prevent values from exploding in deep layers or mixed precision
+                h_new = torch.nan_to_num(h_new, nan=0.0, posinf=100.0, neginf=-100.0)
                 
                 h = h_new
             

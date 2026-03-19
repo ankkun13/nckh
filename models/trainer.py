@@ -18,6 +18,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.optim import Adam
+from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_auc_score, average_precision_score
 
@@ -105,12 +106,37 @@ class GNNTrainer:
                      len(labeled_idx), y_label[labeled_idx].sum(),
                      len(labeled_idx) - y_label[labeled_idx].sum())
         
-        # ✅ OPTIMIZATION: Move static data to device ONCE
+        # ✅ OPTIMIZATION 1: Move static data to device carefully
         logger.info("  Moving static data to %s...", self.device)
+        if self.device.type == 'cuda':
+            free_mem, total_mem = torch.cuda.mem_get_info()
+            logger.info("  GPU Free: %.2f GB / Total: %.2f GB", free_mem/1e9, total_mem/1e9)
+
         x_device = torch.FloatTensor(gene_features).to(self.device)
-        edge_idx_device = [ei.to(self.device) for ei in edge_indices]
-        edge_w_device = [ew.to(self.device) for ew in edge_weights] if edge_weights else None
+        # ✅ SAFETY: Clean features before training
+        x_device = torch.nan_to_num(x_device, nan=0.0, posinf=1.0, neginf=-1.0)
+        
+        # Move edge indices one by one to avoid massive peak allocation
+        edge_idx_device = []
+        for i, ei in enumerate(edge_indices):
+            edge_idx_device.append(ei.to(self.device))
+            if self.device.type == 'cuda' and i % 2 == 0:
+                torch.cuda.empty_cache()
+        
+        edge_w_device = []
+        if edge_weights:
+            for i, ew in enumerate(edge_weights):
+                # ✅ SAFETY: Clean edge weights
+                ew_t = ew.to(self.device)
+                ew_t = torch.nan_to_num(ew_t, nan=0.0, posinf=1.0, neginf=0.0)
+                edge_w_device.append(ew_t)
+        else:
+            edge_w_device = None
+
         y_label_full_t = torch.FloatTensor(y_label).to(self.device)
+        
+        if self.device.type == 'cuda':
+            logger.info("  Static data moved. Allocated: %.2f GB", torch.cuda.memory_allocated()/1e9)
         
         # Split: 75% train+val, 25% test (fixed)
         kf_outer = StratifiedKFold(n_splits=4, shuffle=True, random_state=42)
@@ -169,6 +195,7 @@ class GNNTrainer:
             # Cleanup Fold
             del model, train_mask_t, val_mask_t, y_train_t, y_val_t
             if self.device.type == 'cuda':
+                torch.cuda.synchronize()
                 torch.cuda.empty_cache()
             gc.collect()
         
@@ -217,9 +244,10 @@ class GNNTrainer:
             use_residual=self.use_residual
         ).to(self.device)
         
-        # Loss and optimizer
+        # Loss, optimizer and Mix Precision scaler
         criterion = FocalLoss(alpha=self.focal_alpha, gamma=self.focal_gamma)
         optimizer = Adam(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        scaler = GradScaler(enabled=(self.device.type == 'cuda'))
         
         # Training loop
         best_val_aupr = 0
@@ -228,17 +256,30 @@ class GNNTrainer:
         
         for epoch in range(1, self.epochs + 1):
             model.train()
-            
-            logits, probs = model(x, edge_indices, edge_weights)
-            
-            loss = criterion(
-                logits[train_mask_t],
-                y_train_t[train_mask_t].long(),
-            )
-            
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            
+            # ✅ OPTIMIZATION: Mixed Precision Forward Pass
+            with autocast(enabled=(self.device.type == 'cuda')):
+                logits, probs = model(x, edge_indices, edge_weights)
+                
+                # Check for NaNs to catch exploding gradients early
+                if torch.isnan(logits).any():
+                    logger.error("  ❌ NaN detected in model logits at epoch %d!", epoch)
+                    break
+
+                loss = criterion(
+                    logits[train_mask_t],
+                    y_train_t[train_mask_t].long(),
+                )
+
+                if torch.isnan(loss):
+                    logger.error("  ❌ NaN detected in loss at epoch %d!", epoch)
+                    break
+            
+            # ✅ OPTIMIZATION: Scaled Backward Pass
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             
             # Validation
             if epoch % 10 == 0 or epoch == 1:
@@ -259,7 +300,7 @@ class GNNTrainer:
                         "  ★ Epoch %d: loss=%.4f | val_auc=%.4f | val_aupr=%.4f",
                         epoch, loss.item(), val_metrics['auc'], val_metrics['aupr']
                     )
-                else:
+                elif epoch >= self.min_epoch:
                     patience_counter += 1
                 
                 if epoch % 100 == 0:
@@ -306,16 +347,22 @@ class GNNTrainer:
         labels_np = labels[mask].cpu().detach().numpy().astype(int)
         
         # Need positive and negative samples to compute AUC/AUPR
-        if labels_np.size == 0 or labels_np.sum() == 0 or labels_np.sum() == len(labels_np):
-            return {'auc': 0.0, 'aupr': 0.0, 'acc': 0.0}
+        if labels_np.size == 0:
+            return {'auc': np.nan, 'aupr': np.nan, 'acc': np.nan}
+        
+        if labels_np.sum() == 0 or labels_np.sum() == len(labels_np):
+            # Only one class; technically AUC/AUPR are undefined
+            # We return NaN to distinguish from "trained zero"
+            return {'auc': np.nan, 'aupr': np.nan, 'acc': ( (probs_np[:, 1] > 0.5) == labels_np ).mean()}
         
         try:
             auc = roc_auc_score(labels_np, probs_np[:, 1])
             aupr = average_precision_score(labels_np, probs_np[:, 1])
             preds = (probs_np[:, 1] > 0.5).astype(int)
             acc = (preds == labels_np).mean()
-        except Exception:
-            auc, aupr, acc = 0.0, 0.0, 0.0
+        except Exception as e:
+            logger.error("  ❌ Error calculating metrics: %s", str(e))
+            auc, aupr, acc = np.nan, np.nan, np.nan
         
         return {'auc': auc, 'aupr': aupr, 'acc': acc}
     
@@ -338,13 +385,35 @@ class GNNTrainer:
             cols = adj.col
             values = adj.data
             
-            edge_index = torch.LongTensor(np.vstack([rows, cols]))
+            # ✅ OPTIMIZATION: Add self-loops on CPU to avoid GPU allocation peak
+            # This avoids the OOM in GCNConv's add_remaining_self_loops
+            n_genes = adj.shape[0]
+            
+            # Identify which nodes already have self-loops
+            rows_with_loops = set(rows[rows == cols])
+            missing_loops = np.array([i for i in range(n_genes) if i not in rows_with_loops], dtype=rows.dtype)
+            
+            if len(missing_loops) > 0:
+                rows = np.concatenate([rows, missing_loops])
+                cols = np.concatenate([cols, missing_loops])
+                values = np.concatenate([values, np.ones(len(missing_loops), dtype=np.float32)])
+
+            # ✅ OPTIMIZATION: Use int32 for edge_index (half memory of int64)
+            # Safe as long as n_nodes < 2.1 billion. Gene sets are ~20k-60k.
+            edge_index = torch.IntTensor(np.vstack([rows, cols]))
             edge_weight = torch.FloatTensor(values)
+            
+            # Check density
+            density = len(rows) / (n_genes * n_genes) if n_genes > 0 else 0
+            if density > 0.1:
+                logger.warning("  ⚠️ Graph slice %d is very dense: %.1f%% (%d edges)", 
+                               s, density * 100, len(rows))
+            else:
+                logger.info("  Graph slice %d: %d edges (density: %.2f%%)", 
+                            s, len(rows), density * 100)
             
             edge_indices.append(edge_index)
             edge_weights.append(edge_weight)
-            
-            logger.info("  Graph slice %d: %d edges", s, len(rows))
         
         return edge_indices, edge_weights
     
