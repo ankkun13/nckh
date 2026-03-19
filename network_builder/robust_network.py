@@ -188,74 +188,93 @@ class RobustCoAssociationNetwork:
         
         return diff_co_data
     
-    def _compute_importance_matrix(self, data: np.ndarray) -> np.ndarray:
+    def _compute_importance_matrix(self, data: np.ndarray) -> sp.csr_matrix:
         """
         Compute gene-gene importance matrix using RF or MI.
-        OPTIMIZED: Use sparse matrix to save memory + speed.
+        OPTIMIZED: Use sparse matrix and top-K filtering to prevent OOM.
         """
-
         if data.size == 0:
             logger.warning("Empty data provided to importance computation")
             n_genes = data.shape[0] if data.ndim > 0 else 0
             return sp.csr_matrix((n_genes, n_genes), dtype=np.float32)
 
         n_genes, n_samples = data.shape
-
-        if n_samples < 5:
-            logger.warning("Too few samples (%d) for importance computation, "
-                           "falling back to correlation", n_samples)
-            corr = np.abs(np.corrcoef(
-                data + 1e-4 * np.random.normal(0, 1, data.shape)
-            )).astype(np.float32)
-            np.fill_diagonal(corr, 0)
-            return sp.csr_matrix(corr)
-
-        # Transpose to (samples x genes) for sklearn
         X = data.T  # (n_samples, n_genes)
 
-        # ✅ OPTIMIZATION 1: Filter to top genes by variance
-        logger.info("  Filtering to top genes by variance...")
+        # ✅ OPTIMIZATION 1: Filter to top genes by variance BEFORE anything else
+        # This prevents 16k x 16k dense matrices (273M edges) in fallback paths.
         gene_variances = np.var(X, axis=0)
+        # Handle zero variance or NaN variance (rare but possible after alignment)
+        gene_variances = np.nan_to_num(gene_variances, nan=0.0)
+        
         top_k = min(self.top_k_genes, n_genes)
         top_gene_indices = np.argsort(-gene_variances)[:top_k]
         X_filtered = X[:, top_gene_indices]
+        
+        # Ensure X_filtered is clean
+        X_filtered = np.nan_to_num(X_filtered, nan=0.0)
 
-        logger.info("  Computing importance for top %d genes (of %d by variance), "
-                     "max_features=%d, n_jobs=%s",
-                     top_k, n_genes, self.max_features_mi, self.n_jobs)
-
-        # ✅ OPTIMIZATION 2: Use SPARSE matrix instead of dense!
-        # Store (row, col, value) tuples
-        row_indices = []
-        col_indices = []
-        data_values = []
-
-        if self.method == 'random_forest':
-            self._compute_rf_importance_sparse(
-                X_filtered, top_k, 
-                row_indices, col_indices, data_values
-            )
-        elif self.method == 'mutual_information':
-            self._compute_mi_importance_sparse(
-                X_filtered, top_k,
-                row_indices, col_indices, data_values
-            )
+        # FALLBACK: Correlation for small samples
+        if n_samples < 5:
+            logger.warning("  ⚠️ Too few samples (%d) for importance computation, "
+                           "falling back to filtered correlation", n_samples)
+            # Compute correlation for top-k only (max 4M entries instead of 273M)
+            corr = np.abs(np.corrcoef(
+                X_filtered.T + 1e-4 * np.random.normal(0, 1, X_filtered.T.shape)
+            )).astype(np.float32)
+            np.fill_diagonal(corr, 0)
+            
+            # Apply threshold to keep it sparse
+            importance_sparse = sp.csr_matrix(corr)
+            if self.threshold_percentile > 0:
+                pos_values = importance_sparse.data[importance_sparse.data > 0]
+                if len(pos_values) > 0:
+                    threshold = np.percentile(pos_values, self.threshold_percentile)
+                    importance_sparse.data[importance_sparse.data < threshold] = 0
+                    importance_sparse.eliminate_zeros()
         else:
-            raise ValueError(f"Unknown method: {self.method}")
+            # MAIN PATH: RF or MI
+            logger.info("  Computing %s importance for top %d genes, n_jobs=%s",
+                         self.method, top_k, self.n_jobs)
 
-        # ✅ Build sparse matrix
-        importance_sparse = sp.coo_matrix(
-            (data_values, (row_indices, col_indices)),
-            shape=(top_k, top_k),
-            dtype=np.float32
-        )
-        importance_sparse = importance_sparse.tocsr()
+            row_indices, col_indices, data_values = [], [], []
+            if self.method == 'random_forest':
+                self._compute_rf_importance_sparse(
+                    X_filtered, top_k, row_indices, col_indices, data_values
+                )
+            elif self.method == 'mutual_information':
+                self._compute_mi_importance_sparse(
+                    X_filtered, top_k, row_indices, col_indices, data_values
+                )
+            else:
+                raise ValueError(f"Unknown method: {self.method}")
 
-        # ✅ Symmetrize sparse matrix
-        importance_sparse = importance_sparse + importance_sparse.T
-        importance_sparse.data /= 2
+            # Build sparse matrix
+            importance_sparse = sp.coo_matrix(
+                (data_values, (row_indices, col_indices)),
+                shape=(top_k, top_k),
+                dtype=np.float32
+            ).tocsr()
 
-        # ✅ Map indices from top-k local to global (stay sparse)
+            # Symmetrize
+            importance_sparse = (importance_sparse + importance_sparse.T)
+            importance_sparse.data /= 2
+
+        # Final Threshold and Scaling
+        importance_sparse.setdiag(0)
+        importance_sparse.eliminate_zeros()
+
+        # ✅ OPTIMIZATION 3: Cap max edges to prevent explosive memory growth
+        # 1M edges is roughly 12MB in sparse, well within 8GB limit.
+        MAX_EDGES = 1_000_000
+        if importance_sparse.nnz > MAX_EDGES:
+            logger.warning("  ⚠️ Slice too dense (%d edges), pruning to top %d",
+                           importance_sparse.nnz, MAX_EDGES)
+            threshold = np.sort(importance_sparse.data)[-MAX_EDGES]
+            importance_sparse.data[importance_sparse.data < threshold] = 0
+            importance_sparse.eliminate_zeros()
+
+        # Map back to global indices
         coo = importance_sparse.tocoo()
         global_rows = top_gene_indices[coo.row]
         global_cols = top_gene_indices[coo.col]
@@ -265,20 +284,8 @@ class RobustCoAssociationNetwork:
             dtype=np.float32
         ).tocsr()
 
-        # Remove diagonal
-        importance_global.setdiag(0)
-        importance_global.eliminate_zeros()
-
-        # Apply dynamic threshold (on sparse data directly)
-        if self.threshold_percentile > 0:
-            pos_values = importance_global.data[importance_global.data > 0]
-            if len(pos_values) > 0:
-                threshold = np.percentile(pos_values, self.threshold_percentile)
-                importance_global.data[importance_global.data < threshold] = 0
-                importance_global.eliminate_zeros()
-
-        logger.info("    Importance matrix: %d non-zero entries (sparse)",
-                    importance_global.nnz)
+        logger.info("    Success: %d non-zero entries (density: %.4f%%)",
+                    importance_global.nnz, 100 * importance_global.nnz / (n_genes**2 + 1e-6))
 
         return importance_global
         
@@ -467,9 +474,17 @@ class RobustCoAssociationNetwork:
         if weight_type == 1:
             edges = (edges > 0).astype(np.float32)
         elif weight_type == 2:
-            edges = self._sigmoid(edges / np.max(edges)).astype(np.float32)
+            max_val = np.max(edges) if edges.size > 0 else 0
+            if max_val > 0:
+                edges = self._sigmoid(edges / max_val).astype(np.float32)
+            else:
+                edges = (edges > 0).astype(np.float32)
         elif weight_type == 3:
-            edges = (edges / np.max(edges)).astype(np.float32)
+            max_val = np.max(edges) if edges.size > 0 else 0
+            if max_val > 0:
+                edges = (edges / max_val).astype(np.float32)
+            else:
+                edges = (edges > 0).astype(np.float32)
         
         # Build sparse matrix (stay sparse!)
         ppi_network = sp.coo_matrix(
