@@ -31,7 +31,7 @@ ENV/
 
 # --- Project Specific ---
 ai-agent/data/
-results/
+data/
 execution.log
 
 # --- OS / IDE ---
